@@ -16,6 +16,37 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 
 
+class HeadingNumbering:
+    """标题自动编号器（移植自 md2doc-plus HeaderNumbering）。
+    栈式算法：遇到标题时更新对应层级的计数器，产成如 "1.2.3" 的编号。
+    """
+    def __init__(self):
+        self._counters = {}    # level → counter
+        self._stack = []       # current number path
+
+    def get_number(self, level):
+        """返回当前标题编号，如 '1.2' 或 '2.3.1'。"""
+        if level < 1:
+            return ''
+
+        # 重置更深层级的计数器
+        for lv in list(self._counters.keys()):
+            if lv > level:
+                self._counters[lv] = 0
+
+        # 更新当前层级计数
+        if level not in self._counters:
+            self._counters[level] = 0
+        self._counters[level] += 1
+
+        # 构建编号路径
+        path = []
+        for lv in sorted(self._counters.keys()):
+            if lv <= level and self._counters[lv] > 0:
+                path.append(str(self._counters[lv]))
+        return '.'.join(path)
+
+
 def md_to_docx(md_path: str, docx_path: str):
     """将 .md 文件转换为 .docx。"""
     with open(md_path, 'r', encoding='utf-8') as f:
@@ -23,6 +54,8 @@ def md_to_docx(md_path: str, docx_path: str):
 
     doc = Document()
     _setup_styles(doc)
+
+    numbering = HeadingNumbering()
 
     lines = text.split('\n')
     i = 0
@@ -59,7 +92,9 @@ def md_to_docx(md_path: str, docx_path: str):
         header_match = re.match(r'^(#{1,6})\s+(.+)$', line)
         if header_match:
             level = len(header_match.group(1))
-            _add_heading(doc, header_match.group(2), level)
+            num = numbering.get_number(level)
+            title = f'{num} {header_match.group(2)}' if num else header_match.group(2)
+            _add_heading(doc, title, level)
             i += 1
             continue
 
@@ -126,16 +161,22 @@ def md_to_docx(md_path: str, docx_path: str):
 
 
 def _setup_styles(doc):
-    """设置默认样式。"""
+    """设置默认样式：字体、1.5倍行距、首行缩进。"""
     style = doc.styles['Normal']
     font = style.font
     font.name = 'Microsoft YaHei'
     font.size = Pt(11)
 
+    pf = style.paragraph_format
+    pf.line_spacing = 1.5
+    pf.first_line_indent = Cm(0.74)  # ~2个中文字符宽度
+
 
 def _add_paragraph(doc, text):
     """添加段落，处理行内格式。"""
     p = doc.add_paragraph()
+    p.paragraph_format.line_spacing = 1.5
+    p.paragraph_format.first_line_indent = Cm(0.74)
     _add_formatted_runs(p, text)
 
 
@@ -182,28 +223,81 @@ def _add_list(doc, items, ordered=False):
         _add_formatted_runs(p, item)
 
 
+_table_counter = 0  # 表格序号计数器
+
+
 def _add_table(doc, lines):
-    """添加表格。"""
+    """添加表格（浅蓝表头、100%宽度、居中、自动编号标题）。"""
+    global _table_counter
     rows = []
-    header_sep_seen = False
     for line in lines:
         if re.match(r'^\|?[\s\-:|]+\|?$', line.strip()):
-            header_sep_seen = True
-            continue
+            continue  # 分隔行跳过
         cells = [c.strip() for c in line.strip().strip('|').split('|')]
         rows.append(cells)
 
-    if not rows:
-        return
     if len(rows) < 2:
         return
 
+    _table_counter += 1
+
+    # 表格上方标题
+    caption = doc.add_paragraph()
+    caption.paragraph_format.line_spacing = 1.5
+    caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = caption.add_run(f'表格 {_table_counter}')
+    run.bold = True
+    run.font.size = Pt(10)
+
     table = doc.add_table(rows=len(rows), cols=len(rows[0]))
     table.style = 'Table Grid'
+
+    # 设置表格宽度为100%
+    tbl = table._element
+    tblPr = tbl.find(qn('w:tblPr'))
+    if tblPr is None:
+        tblPr = tbl.makeelement(qn('w:tblPr'), {})
+        tbl.insert(0, tblPr)
+    tblW = tblPr.find(qn('w:tblW'))
+    if tblW is None:
+        tblW = tblPr.makeelement(qn('w:tblW'), {})
+        tblPr.append(tblW)
+    tblW.set(qn('w:w'), '5000')
+    tblW.set(qn('w:type'), 'pct')
+
     for i, row_cells in enumerate(rows):
         for j, cell_text in enumerate(row_cells):
-            if j < len(table.rows[i].cells):
-                table.rows[i].cells[j].text = cell_text
+            if j >= len(table.rows[i].cells):
+                continue
+            cell = table.rows[i].cells[j]
+            cell.text = ''
+
+            # 表头行：浅蓝背景 + 加粗居中
+            if i == 0:
+                _set_cell_shading(cell, 'B4C6E7')
+                run = cell.paragraphs[0].add_run(cell_text)
+                run.bold = True
+                run.font.size = Pt(10)
+                cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            else:
+                run = cell.paragraphs[0].add_run(cell_text)
+                run.font.size = Pt(10)
+                # 首列也加粗（通常是指标名）
+                if j == 0:
+                    run.bold = True
+                else:
+                    cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+
+def _set_cell_shading(cell, color):
+    """设置单元格背景色。"""
+    tcPr = cell._element.get_or_add_tcPr()
+    shd = tcPr.makeelement(qn('w:shd'), {
+        qn('w:val'): 'clear',
+        qn('w:color'): 'auto',
+        qn('w:fill'): color,
+    })
+    tcPr.append(shd)
 
 
 def _add_blockquote(doc, text):
