@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.spec
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Temp files
+*.tmp
+*_converted*.docx
+*_converted*.docm
+*_公式转换*.docx
+*_fixed*.docx
+*_final*.docx
+*_test*.docx
+*_analysis.txt
+*_report.txt
+C:/Users/*/AppData/Local/Temp/
+
+# Word temp files
+~$*.docx
+~$*.docm
+*.wbk
+
+# Test output files
+tests/sample_converted*.docx
+tests/sample_fixed*.docx
+tests/sample_final*.docx
+tests/sample_professional*.docx
+tests/sample_input.docx
+tests/md_test_analysis.txt
+tests/md_test_report.txt
+md2doc-plus/
