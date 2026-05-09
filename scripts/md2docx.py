@@ -17,33 +17,37 @@ from docx.oxml.ns import qn
 
 
 class HeadingNumbering:
-    """标题自动编号器（移植自 md2doc-plus HeaderNumbering）。
-    栈式算法：遇到标题时更新对应层级的计数器，产成如 "1.2.3" 的编号。
+    """标题自动编号器。
+    栈式算法：遇到标题时更新对应层级的计数器，产生如 "1.2.3" 的编号。
+    如果标题原文已含手动编号（一、/ 1. / (1) 等），则跳过自动编号。
     """
+    # 匹配标题开头已有的手动编号
+    MANUAL_NUMBER = re.compile(
+        r'^[\s]*('
+        r'[一-鿿]{1,3}[、．.]'       # 一、二、三、
+        r'|\d+[\.\、\)]\s*'                   # 1. 1) 1、
+        r'|[（(]\d+[）)]'                      # (1) （1）
+        r'|[ivxIVX]+[\.、]\s*'                # i. ii. iv.
+        r')'
+    )
+
     def __init__(self):
-        self._counters = {}    # level → counter
-        self._stack = []       # current number path
+        self._counters = {}
+
+    def need_auto_number(self, raw_title):
+        """检查标题是否需要自动编号（原标题无手动编号）。"""
+        return not self.MANUAL_NUMBER.match(raw_title.strip())
 
     def get_number(self, level):
-        """返回当前标题编号，如 '1.2' 或 '2.3.1'。"""
+        """返回当前标题编号，如 '1.2'。"""
         if level < 1:
             return ''
-
-        # 重置更深层级的计数器
         for lv in list(self._counters.keys()):
             if lv > level:
                 self._counters[lv] = 0
-
-        # 更新当前层级计数
-        if level not in self._counters:
-            self._counters[level] = 0
-        self._counters[level] += 1
-
-        # 构建编号路径
-        path = []
-        for lv in sorted(self._counters.keys()):
-            if lv <= level and self._counters[lv] > 0:
-                path.append(str(self._counters[lv]))
+        self._counters[level] = self._counters.get(level, 0) + 1
+        path = [str(self._counters[lv]) for lv in sorted(self._counters)
+                if lv <= level and self._counters.get(lv, 0) > 0]
         return '.'.join(path)
 
 
@@ -92,9 +96,13 @@ def md_to_docx(md_path: str, docx_path: str):
         header_match = re.match(r'^(#{1,6})\s+(.+)$', line)
         if header_match:
             level = len(header_match.group(1))
-            num = numbering.get_number(level)
-            title = f'{num} {header_match.group(2)}' if num else header_match.group(2)
-            _add_heading(doc, title, level)
+            raw_title = header_match.group(2)
+            if numbering.need_auto_number(raw_title):
+                num = numbering.get_number(level)
+                title = f'{num} {raw_title}' if num else raw_title
+            else:
+                title = raw_title
+            _add_heading(doc, title, min(level, 6))
             i += 1
             continue
 
@@ -181,10 +189,16 @@ def _add_paragraph(doc, text):
 
 
 def _add_heading(doc, text, level):
-    """添加标题。"""
-    p = doc.add_heading(level=min(level, 3))
+    """添加标题，使用 Word 内置标题样式 (1-6级，视觉区分)。"""
+    p = doc.add_heading(level=level)
     _clear_heading_run(p)
     _add_formatted_runs(p, text)
+
+    # 补充字号设定确保层级区分
+    font_sizes = {1: Pt(22), 2: Pt(16), 3: Pt(14), 4: Pt(13), 5: Pt(12), 6: Pt(11)}
+    if level in font_sizes:
+        for run in p.runs:
+            run.font.size = font_sizes[level]
 
 
 def _clear_heading_run(p):
