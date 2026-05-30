@@ -51,8 +51,14 @@ class HeadingNumbering:
         return '.'.join(path)
 
 
-def md_to_docx(md_path: str, docx_path: str):
+_IMG_BASE_DIR = ''  # 模块级图片路径基准
+
+
+def md_to_docx(md_path: str, docx_path: str, auto_number: bool = True):
     """将 .md 文件转换为 .docx。"""
+    global _IMG_BASE_DIR
+    _IMG_BASE_DIR = os.path.dirname(os.path.abspath(md_path))
+
     with open(md_path, 'r', encoding='utf-8') as f:
         text = f.read()
 
@@ -65,6 +71,15 @@ def md_to_docx(md_path: str, docx_path: str):
     i = 0
     while i < len(lines):
         line = lines[i]
+
+        # 独立图片行: ![alt](path)
+        img_match = re.match(r'^!\[([^\]]*)\]\(([^)]+)\)\s*$', line)
+        if img_match:
+            alt_text = img_match.group(1)
+            img_path = img_match.group(2)
+            _add_image(doc, img_path, alt_text=alt_text)
+            i += 1
+            continue
 
         # 代码块
         if line.strip().startswith('```'):
@@ -97,7 +112,7 @@ def md_to_docx(md_path: str, docx_path: str):
         if header_match:
             level = len(header_match.group(1))
             raw_title = header_match.group(2)
-            if numbering.need_auto_number(raw_title):
+            if auto_number and numbering.need_auto_number(raw_title):
                 num = numbering.get_number(level)
                 title = f'{num} {raw_title}' if num else raw_title
             else:
@@ -323,6 +338,35 @@ def _add_blockquote(doc, text):
     run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
 
 
+def _add_image(doc, img_path, base_dir='', alt_text=''):
+    """添加图片到文档（独立块级）。支持相对路径和绝对路径。"""
+    if not base_dir:
+        base_dir = _IMG_BASE_DIR
+    if not os.path.isabs(img_path):
+        img_path = os.path.join(base_dir, img_path)
+    if not os.path.exists(img_path):
+        p = doc.add_paragraph()
+        run = p.add_run(f'[图片缺失: {alt_text or os.path.basename(img_path)}]')
+        run.font.color.rgb = RGBColor(0xCC, 0x00, 0x00)
+        return
+
+    try:
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = p.add_run()
+        run.add_picture(img_path, width=Inches(5.5))
+        if alt_text:
+            cap = doc.add_paragraph()
+            cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            cap_run = cap.add_run(alt_text)
+            cap_run.font.size = Pt(9)
+            cap_run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+    except Exception:
+        p = doc.add_paragraph()
+        run = p.add_run(f'[图片加载失败: {alt_text or os.path.basename(img_path)}]')
+        run.font.color.rgb = RGBColor(0xCC, 0x00, 0x00)
+
+
 def _add_horizontal_rule(doc):
     """添加水平线。"""
     p = doc.add_paragraph()
@@ -341,7 +385,7 @@ def _add_horizontal_rule(doc):
 
 
 def _add_formatted_runs(p, text):
-    """Parse inline formatting and add runs. Handles **bold**, *italic*, `code`, and $formulas$."""
+    """Parse inline formatting and add runs. Handles **bold**, *italic*, `code`, $formulas$, images."""
     _PH = '___PROTECT_'
     protected = []
 
@@ -361,6 +405,7 @@ def _add_formatted_runs(p, text):
     text = _protect(r'\$\$[\s\S]+?\$\$', text)  # display formulas (multiline)
     text = _protect(r'\$[^$\n\r]+\$', text)     # inline formulas
     text = _protect(r'`[^`]+`', text)            # inline code
+    text = _protect(r'!\[[^\]]*\]\([^)]+\)', text)  # inline images
 
     # Split by bold/italic markers. Each part may contain regular text + placeholders.
     parts = re.split(r'(\*\*[\s\S]+?\*\*|(?<!\*)\*[^*\s][^*\n]*\*(?!\*))', text)
@@ -391,14 +436,30 @@ def _add_content_with_placeholders(p, text, protected, _PH, bold=False, italic=F
         # Add text before the placeholder
         if m.start() > last:
             _append_run(p, text[last:m.start()], bold, italic)
-        # Add the protected content (formula or code)
+        # Add the protected content
         idx = int(m.group(1))
         raw = protected[idx]
-        # For inline code, strip the backtick delimiters
+        # Inline code
         if raw.startswith('`') and raw.endswith('`'):
             run = _append_run(p, raw[1:-1], bold, italic)
             run.font.name = 'Consolas'
             run.font.size = Pt(9)
+        # Inline image: ![alt](path)
+        elif raw.startswith('!['):
+            img_match = re.match(r'!\[([^\]]*)\]\(([^)]+)\)', raw)
+            if img_match:
+                img_path = img_match.group(2)
+                alt = img_match.group(1)
+                if not os.path.isabs(img_path):
+                    img_path = os.path.join(_IMG_BASE_DIR, img_path)
+                if os.path.exists(img_path):
+                    try:
+                        run = _append_run(p, '', bold, italic)
+                        run.add_picture(img_path, width=Inches(1.0))
+                    except Exception:
+                        _append_run(p, alt or '[图片]', bold, italic)
+                else:
+                    _append_run(p, alt or '[图片]', bold, italic)
         else:
             _append_run(p, raw, bold, italic)
         last = m.end()

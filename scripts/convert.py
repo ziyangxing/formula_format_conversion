@@ -367,7 +367,7 @@ def _replace_text_with_omath(p_elem, runs_data, ms, me, omath_elem):
 # 主入口
 # ============================================================
 
-def process_document(input_path, output_path):
+def process_document(input_path, output_path, auto_number=True):
     """处理整个文档。支持 .docx/.docm 和 .md 文件。"""
     ext = os.path.splitext(input_path)[1].lower()
 
@@ -378,7 +378,7 @@ def process_document(input_path, output_path):
         docx_tmp = os.path.join(tmp_dir, '_md_temp.docx')
         from md2docx import md_to_docx
         print(f"转换 Markdown → DOCX: {input_path}")
-        md_to_docx(input_path, docx_tmp)
+        md_to_docx(input_path, docx_tmp, auto_number=auto_number)
         input_path = docx_tmp
         # 确保输出为 .docx
         if not output_path.lower().endswith('.docx'):

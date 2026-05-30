@@ -6,7 +6,7 @@ FormulaConverter GUI - AI公式 → Word专业公式 批量转换工具
 兼容 WPS 和 Microsoft Word。
 """
 
-import os, sys, threading, tkinter as tk
+import os, sys, json, threading, tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -15,17 +15,38 @@ if SCRIPT_DIR not in sys.path:
 
 from convert import process_document
 
+CONFIG_PATH = os.path.expanduser("~/.formula_converter_config.json")
+
+
+def _load_config():
+    try:
+        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_config(cfg):
+    try:
+        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+            json.dump(cfg, f, ensure_ascii=False)
+    except Exception:
+        pass
+
 
 class FormulaConverterGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("FormulaConverter - AI公式转Word专业公式")
-        self.root.geometry("750x560")
-        self.root.minsize(600, 420)
+        self.root.geometry("750x580")
+        self.root.minsize(600, 440)
         self.root.configure(bg="#f5f5f5")
 
         self.file_list = []
         self.output_dir = tk.StringVar(value=os.path.expanduser("~/Desktop"))
+
+        cfg = _load_config()
+        self.auto_number_var = tk.BooleanVar(value=cfg.get('auto_number', True))
         self._setup_style()
         self._build_ui()
         self._center_window()
@@ -90,6 +111,17 @@ class FormulaConverterGUI:
         self.out_entry = ttk.Entry(of, textvariable=self.output_dir, font=("Consolas", 10))
         self.out_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         ttk.Button(of, text="浏览...", command=self._choose_output).pack(side=tk.LEFT)
+
+        # Options row
+        optf = tk.Frame(self.root, bg="#f5f5f5")
+        optf.pack(fill=tk.X, padx=20, pady=(8, 0))
+        self.auto_number_cb = ttk.Checkbutton(
+            optf,
+            text="标题自动编号（如 1.1, 1.2）",
+            variable=self.auto_number_var,
+            command=self._on_option_toggle,
+        )
+        self.auto_number_cb.pack(side=tk.LEFT)
 
         # Progress
         pf = tk.Frame(self.root, bg="#f5f5f5")
@@ -183,6 +215,9 @@ class FormulaConverterGUI:
         if folder:
             self.output_dir.set(folder)
 
+    def _on_option_toggle(self):
+        _save_config({'auto_number': self.auto_number_var.get()})
+
     def _update_status(self):
         n = len(self.file_list)
         self.status_label.config(text=f"已添加 {n} 个文件，准备就绪" if n else "就绪 - 请添加文件后点击 [开始转换]")
@@ -210,6 +245,7 @@ class FormulaConverterGUI:
 
     def _run(self, out_dir):
         total_ok, errors = 0, []
+        auto_number = self.auto_number_var.get()
 
         for i, (path, name) in enumerate(self.file_list):
             self._ui(lambda: self.status_label.config(
@@ -223,7 +259,7 @@ class FormulaConverterGUI:
                 c += 1
 
             try:
-                converted, _ = process_document(path, out)
+                converted, _ = process_document(path, out, auto_number=auto_number)
                 total_ok += converted
                 self._ui(lambda: self.progress.configure(value=i+1))
             except Exception as e:
